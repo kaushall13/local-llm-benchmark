@@ -1,232 +1,299 @@
 import os
-import subprocess
 import time
 import psutil
 import pynvml
-import csv
-import sys
+import json
 import pandas as pd
 from tqdm import tqdm
 from datetime import datetime
+import re
+import threading
+import sys
+from llama_cpp import Llama
+import contextlib
+import itertools
+from operator import itemgetter
 
-# ---------------- CONFIG ---------------- #
-# IMPORTANT: Update these paths to your actual model files.
-# Use forward slashes for cross-platform compatibility.
-MODELS = {
-    "llama3-8b": "models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
-    "qwen2.5-1.5b": "models/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
-    "gemma-2b": "models/vikhr-gemma-2b-instruct-q4_k_m.gguf"
-}
+# ----------------- ANSI Color Codes for Terminal Output ----------------- #
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
 
-THREADS = 12
-GPU_LAYERS = 35
-TRIALS = 3
-# IMPORTANT: Update this path to your actual prompt file.
+# --------------------------- CONFIGURATION ---------------------------- #
+CONFIG_PATH = "benchmark_config_grid.json"
+OUTPUT_CSV_PREFIX = "benchmark_results"
+ENV_SNAPSHOT = "environment_snapshot.json"
+THREADS = psutil.cpu_count(logical=False) or 4 # Default to physical cores
+TRIALS = 2 # Number of times to run each benchmark for averaging
 PROMPT_PATH = "prompts/base_prompt.txt"
-GEN_LENGTH = [32, 128, 256]
-CONTEXT_SIZE = 4096
-USE_CPU_ONLY = False  # set to True to simulate full CPU mode
+# ---------------------------------------------------------------------- #
 
-OUTPUT_CSV = "benchmark_results.csv"
-# IMPORTANT: Update this path to your llama-run.exe or equivalent executable.
-# For Linux/macOS, this would typically be 'llama-run' or './llama-run'
-# depending on your build location and PATH.
-LLAMA_RUN_PATH = "path/to/your/llama.cpp/build/bin/Release/llama-run.exe"
-# ---------------------------------------- #
+def print_message(text, color=bcolors.ENDC):
+    """Prints a colored message to the console."""
+    print(f"{color}{text}{bcolors.ENDC}")
 
 def read_prompt():
-    """Reads the prompt content from the specified PROMPT_PATH."""
+    """Reads the prompt from the specified file."""
     with open(PROMPT_PATH, 'r', encoding='utf-8') as f:
         return f.read().strip()
 
-def monitor_resources(pid, interval=0.1):
-    """
-    Monitors CPU, RAM, and VRAM usage for a given process ID.
-    Returns peak usage statistics.
-    """
-    process = psutil.Process(pid)
-    cpu_usage, ram_usage = [], []
-    vram_usage = []
-
+def snapshot_env():
+    """Saves a snapshot of the hardware environment to a JSON file."""
+    print_message("🔬 Taking environment snapshot...", bcolors.OKCYAN)
     try:
         pynvml.nvmlInit()
-        handle = pynvml.nvmlDeviceGetHandleByIndex(0) # Assuming single GPU, adjust if needed
-    except pynvml.NVMLError as error:
-        print(f"NVML Error: {error}. VRAM monitoring will be skipped.")
-        handle = None
+        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        name = pynvml.nvmlDeviceGetName(handle)
+        gpu_name = name.decode('utf-8') if isinstance(name, bytes) else name
+        vram_gb = round(pynvml.nvmlDeviceGetMemoryInfo(handle).total / (1024 ** 3), 2)
+        pynvml.nvmlShutdown()
+    except pynvml.NVMLError:
+        gpu_name, vram_gb = "N/A", 0
+        print_message("⚠️ NVML not available. GPU info will be skipped.", bcolors.WARNING)
 
-    while True:
+    env = {
+        "timestamp": datetime.now().isoformat(),
+        "cpu": os.environ.get("PROCESSOR_IDENTIFIER", "unknown"),
+        "cores": psutil.cpu_count(logical=False),
+        "threads": psutil.cpu_count(logical=True),
+        "ram_gb": round(psutil.virtual_memory().total / (1024 ** 3), 2),
+        "gpu": gpu_name,
+        "vram_gb": vram_gb
+    }
+    with open(ENV_SNAPSHOT, 'w') as f:
+        json.dump(env, f, indent=4)
+    print_message("✅ Environment snapshot saved.", bcolors.OKGREEN)
+
+def monitor_resources(stop_event, result_dict):
+    """Monitors the current process's resource usage in a thread."""
+    pid = os.getpid()
+    process = psutil.Process(pid)
+    process.cpu_percent(interval=None) # Prime the pump for cpu_percent
+    
+    try:
+        pynvml.nvmlInit()
+        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        has_gpu = True
+    except pynvml.NVMLError:
+        has_gpu = False
+    
+    cpu_usage, ram_usage, vram_usage = [], [], []
+
+    while not stop_event.is_set():
         try:
-            cpu = process.cpu_percent(interval=None) # Get CPU usage since last call
-            ram = process.memory_info().rss / (1024 ** 2) # Convert bytes to MB
-
-            if handle:
-                try:
-                    mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-                    vram = (mem_info.used) / (1024 ** 2) # Convert bytes to MB
-                except pynvml.NVMLError as error:
-                    vram = 0 # VRAM not available
-            else:
-                vram = 0 # VRAM monitoring skipped
-
-            cpu_usage.append(cpu)
-            ram_usage.append(ram)
-            vram_usage.append(vram)
-        except psutil.NoSuchProcess:
-            # Process has terminated
+            cpu_usage.append(process.cpu_percent(interval=None) / THREADS)
+            ram_usage.append(process.memory_info().rss / (1024 ** 2))
+            if has_gpu:
+                vram_usage.append(pynvml.nvmlDeviceGetMemoryInfo(handle).used / (1024 ** 2))
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
             break
-        except Exception as e:
-            # Catch other potential errors during monitoring
-            print(f"Error during resource monitoring: {e}")
-            break
-        time.sleep(interval)
-
-    if handle:
-        pynvml.nvmlShutdown() # Shutdown NVML when monitoring is complete
-
-    return {
-        "cpu_peak": max(cpu_usage, default=0),
-        "ram_peak": max(ram_usage, default=0),
-        "vram_peak": max(vram_usage, default=0)
-    }
-
-def run_benchmark(model_name, model_path, prompt, n_predict):
-    """
-    Runs a single benchmark trial for a given model and generation length.
-    Measures load time, time to first token, tokens per second, and resource usage.
-    """
-    args = [
-        LLAMA_RUN_PATH,
-        "-m", model_path, # Use -m for model path as per llama.cpp common usage
-        "-p", prompt,     # Use -p for prompt
-        "-n", str(n_predict), # Use -n for number of tokens to predict
-        "--threads", str(THREADS),
-        "--ctx-size", str(CONTEXT_SIZE), # Use --ctx-size for context size
-        "--n-gpu-layers", str(0 if USE_CPU_ONLY else GPU_LAYERS), # Use --n-gpu-layers
-        "--temp", "0.7",
-        "--top-k", "40", # Add common generation parameters
-        "--top-p", "0.9",
-        "--repeat-penalty", "1.1",
-        "--mirostat", "0", # Disable mirostat by default for consistent benchmarks
-        "--no-display-prompt" # Suppress prompt display in output
-    ]
-
-    # Start the subprocess
-    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+        time.sleep(0.2)
     
-    # Start resource monitoring in a separate thread or after process start
-    # For simplicity in this example, we'll call it directly after Popen,
-    # but for continuous monitoring, a separate thread is better.
-    # Note: psutil.Process() can be called immediately after Popen.
+    result_dict['cpu_peak_percent'] = max(cpu_usage, default=0)
+    result_dict['ram_peak_mb'] = max(ram_usage, default=0)
+    result_dict['vram_peak_mb'] = max(vram_usage, default=0)
+
+    if has_gpu:
+        pynvml.nvmlShutdown()
+
+def get_quant_from_filename(filename):
+    """Extracts quantization type from a GGUF filename."""
+    base_name = os.path.basename(filename)
+    match = re.search(r'(Q[2-8]_[A-Z0-9_]+)', base_name, re.IGNORECASE)
+    if match:
+        return match.group(1).upper()
+    return "unknown"
+
+def run_inference(llm_instance, config, prompt):
+    """Runs inference on an already loaded Llama instance."""
+    result = {**config, "error": None}
+    resource_stats = {}
     
-    # Capture output and timings
-    start_load = time.time()
-    first_token_time = None
-    token_count = 0
-    full_output = []
+    stop_monitoring = threading.Event()
+    monitor_thread = threading.Thread(target=monitor_resources, args=(stop_monitoring, resource_stats))
+    monitor_thread.start()
     
-    # Read stderr for llama.cpp specific metrics if available
-    stderr_lines = []
-    
-    # Read stdout line by line to capture first token and generation
-    for line in iter(proc.stdout.readline, ''):
-        full_output.append(line)
-        if not first_token_time and line.strip(): # First non-empty line is considered first token
-            first_token_time = time.time()
+    try:
+        with open(os.devnull, 'w') as f, contextlib.redirect_stderr(f), contextlib.redirect_stdout(f):
+            start_gen_time = time.time()
+            output = llm_instance(
+                prompt,
+                max_tokens=config['gen_length'],
+                temperature=0.7,
+            )
+            manual_gen_time_s = time.time() - start_gen_time
         
-        # Crude token count based on lines, better to parse llama.cpp output if possible
-        token_count += line.count(' ') + 1 # Very rough estimate
+        usage = output['usage']
+        prompt_eval_time_s = usage.get('prompt_eval_time', 0) / 1000
+        result['ttft_s'] = prompt_eval_time_s # TTFT for a loaded model is just prompt eval time
         
-        if token_count >= n_predict:
-            break # Stop reading if target length is reached
+        completion_time_s = usage.get('completion_time', 0) / 1000
+        completion_tokens = usage.get('completion_tokens', 0)
+        
+        tps = 0
+        if completion_time_s > 0 and completion_tokens > 0:
+            tps = completion_tokens / completion_time_s
+        elif manual_gen_time_s > 0 and completion_tokens > 0:
+            tps = completion_tokens / manual_gen_time_s
+        
+        result['tps'] = tps
+        result['tpm'] = tps * 60
+        
+    except Exception as e:
+        result['error'] = str(e)
+        print_message(f"\n--- INFERENCE FAILED for {config['model_name']}: {e} ---", bcolors.FAIL)
+        
+    finally:
+        stop_monitoring.set()
+        monitor_thread.join()
+        result.update(resource_stats)
 
-    # Read remaining stderr output
-    for line in iter(proc.stderr.readline, ''):
-        stderr_lines.append(line)
+    return result
 
-    proc.stdout.close()
-    proc.stderr.close()
-    proc.wait() # Wait for the process to terminate
-
-    end_time = time.time()
+def generate_test_configs(grid_config):
+    """Generates a list of individual test configurations from a grid."""
+    test_configs = []
+    models = grid_config.get('models', [])
+    params = grid_config.get('parameters', {})
     
-    # Get peak resource usage after the process has finished or during its run
-    # For accurate peak usage during the process, 'monitor_resources' should run concurrently.
-    # Here, we'll run it on the *terminated* process, which might not capture live peaks.
-    # A more robust solution involves threading for monitoring.
-    peak_stats = monitor_resources(proc.pid) # This will likely return 0s if process is already dead.
-                                            # For actual live monitoring, this should be in a separate thread.
-                                            # For this script's purpose, it's illustrative.
+    param_keys = params.keys()
+    param_values = params.values()
+    param_combinations = [dict(zip(param_keys, v)) for v in itertools.product(*param_values)]
 
-    total_time = end_time - start_load
-    ttft = (first_token_time - start_load) if first_token_time else None
+    for model in models:
+        for param_set in param_combinations:
+            config = {
+                "model_name": model["name"],
+                "model_path": os.path.abspath(model["path"]),
+                **param_set
+            }
+            test_configs.append(config)
+            
+    return test_configs
+
+def print_summary(df):
+    """Prints a formatted summary of the benchmark results to the console."""
+    print_message("\n\n--- Benchmark Summary ---", bcolors.HEADER)
     
-    # Parse llama.cpp statistics from stderr
-    load_time_llama = "NA"
-    pp_tps = "NA" # Prompt processing tokens/second
-    gen_tps = "NA" # Generation tokens/second
-    
-    for s_line in stderr_lines:
-        if "load time" in s_line:
-            try:
-                load_time_llama = float(s_line.split("load time = ")[1].split(" ms")[0]) / 1000 # Convert ms to s
-            except (ValueError, IndexError):
-                pass
-        if "pp_token_per_second" in s_line:
-            try:
-                pp_tps = float(s_line.split("pp_token_per_second = ")[1].split(" ")[0])
-            except (ValueError, IndexError):
-                pass
-        if "gen_token_per_second" in s_line:
-            try:
-                gen_tps = float(s_line.split("gen_token_per_second = ")[1].split(" ")[0])
-            except (ValueError, IndexError):
-                pass
+    # Group by model, then by test parameters
+    for model_name, model_group in df.groupby('model_name'):
+        print_message(f"\nModel: {bcolors.BOLD}{model_name}{bcolors.ENDC}", bcolors.OKBLUE)
+        
+        param_groups = model_group.groupby(['context_size', 'gen_length'])
+        for params, group in param_groups:
+            context_size, gen_length = params
+            print(f"  Test Scenario (context: {int(context_size)}, generation: {int(gen_length)}):")
+            
+            cpu_run = group[group['ngl'] == 0].iloc[0] if not group[group['ngl'] == 0].empty else None
+            gpu_run = group[group['ngl'] != 0].iloc[0] if not group[group['ngl'] != 0].empty else None
 
-    # Use gen_tps from llama.cpp if available, otherwise calculate
-    tps = gen_tps if gen_tps != "NA" else (token_count / (end_time - ttft)) if ttft else 0
-    tpm = tps * 60
+            if cpu_run is not None:
+                print(f"    - CPU: TTFT: {cpu_run['ttft_s']:.2f}s | TPS: {bcolors.OKGREEN}{cpu_run['tps']:.2f}{bcolors.ENDC} | RAM Peak: {cpu_run['ram_peak_mb']:.0f} MB")
+            
+            if gpu_run is not None:
+                print(f"    - GPU: TTFT: {gpu_run['ttft_s']:.2f}s | TPS: {bcolors.OKGREEN}{gpu_run['tps']:.2f}{bcolors.ENDC} | VRAM Peak: {gpu_run['vram_peak_mb']:.0f} MB")
 
-    return {
-        "model": model_name,
-        "quant": model_path.split('.')[-2] if '.' in model_path else "unknown",
-        "prompt_len": len(prompt),
-        "gen_len": n_predict,
-        "total_time_s": round(total_time, 2), # Total time from script perspective
-        "load_time_llama_s": round(load_time_llama, 2) if isinstance(load_time_llama, (int, float)) else load_time_llama,
-        "ttft_s": round(ttft, 2) if ttft else "NA",
-        "pp_tps": round(pp_tps, 2) if isinstance(pp_tps, (int, float)) else pp_tps,
-        "gen_tps": round(tps, 2), # Use this as the primary generation TPS
-        "gen_tpm": round(tpm, 2),
-        "cpu_peak_percent": round(peak_stats["cpu_peak"], 2),
-        "ram_peak_mb": round(peak_stats["ram_peak"], 2),
-        "vram_peak_mb": round(peak_stats["vram_peak"], 2)
-    }
+            if cpu_run is not None and gpu_run is not None and cpu_run['tps'] > 0:
+                performance_increase = gpu_run['tps'] / cpu_run['tps']
+                print(f"      {bcolors.OKCYAN}Performance Gain: GPU is {performance_increase:.2f}x faster{bcolors.ENDC}")
 
 def main():
-    """Main function to orchestrate the benchmarking process."""
-    results = []
-    prompt = read_prompt()
-
-    print("Starting benchmark...")
-    for model_name, model_path in MODELS.items():
-        for length in GEN_LENGTH:
-            for i in tqdm(range(TRIALS), desc=f"Benchmarking {model_name} (Gen Length: {length} tokens)"):
-                print(f"\n--- Running trial {i+1}/{TRIALS} for {model_name} (Gen Length: {length}) ---")
-                try:
-                    result = run_benchmark(model_name, model_path, prompt, length)
-                    results.append(result)
-                    print(f"Trial {i+1} complete. Results: {result}")
-                except Exception as e:
-                    print(f"Error in benchmarking {model_name} at {length} tokens (Trial {i+1}): {e}", file=sys.stderr)
+    """Main function to orchestrate the benchmarking suite."""
+    if not os.path.exists(CONFIG_PATH):
+        print_message(f"FATAL: `{CONFIG_PATH}` not found.", bcolors.FAIL)
+        return
+        
+    if not os.path.exists(PROMPT_PATH):
+        os.makedirs(os.path.dirname(PROMPT_PATH), exist_ok=True)
+        with open(PROMPT_PATH, "w") as f: f.write("Once upon a time,")
     
-    # Write CSV
-    if results:
-        df = pd.DataFrame(results)
-        df.to_csv(OUTPUT_CSV, index=False)
-        print(f"\nBenchmark complete. Results saved to {OUTPUT_CSV}")
-    else:
-        print("\nNo benchmark results were generated due to errors or no trials run.")
+    with open(CONFIG_PATH, 'r') as f:
+        grid_config = json.load(f)
+    
+    configs = generate_test_configs(grid_config)
+    
+    snapshot_env()
+    prompt = read_prompt()
+    all_results = []
+    
+    # Group configs by model, context size, and ngl to minimize model loading
+    configs.sort(key=itemgetter('model_path', 'context_size', 'ngl'))
+    grouped_for_loading = itertools.groupby(configs, key=itemgetter('model_path', 'context_size', 'ngl'))
+    
+    total_scenarios = len(configs)
+    
+    try:
+        with tqdm(total=total_scenarios, desc="Benchmarking Scenarios", file=sys.stdout) as pbar:
+            for (model_path, context_size, ngl), group_iterator in grouped_for_loading:
+                # Convert iterator to list to reuse it
+                group_configs = list(group_iterator)
+                model_name = group_configs[0]['model_name']
+                pbar.set_description(f"Loading {model_name[:20]} (ctx: {context_size}, ngl: {ngl})")
+                
+                # --- Load Model Once Per Group ---
+                load_time = 0
+                llm = None
+                try:
+                    with open(os.devnull, 'w') as f, contextlib.redirect_stderr(f), contextlib.redirect_stdout(f):
+                        start_load_time = time.time()
+                        llm = Llama(model_path=model_path, n_ctx=context_size, n_gpu_layers=ngl, n_threads=THREADS, verbose=False)
+                        load_time = time.time() - start_load_time
+                except Exception as e:
+                    print_message(f"\nFATAL: Failed to load model {model_name}. Error: {e}", bcolors.FAIL)
+                    for cfg in group_configs:
+                        cfg['error'] = str(e)
+                        all_results.append(cfg)
+                        pbar.update(1)
+                    continue
+
+                # --- Run Inference for all gen_lengths in this group ---
+                for cfg in group_configs:
+                    pbar.set_description(f"Running {cfg['model_name'][:20]} (gen: {cfg['gen_length']})")
+                    
+                    trial_results = [run_inference(llm, cfg, prompt) for _ in range(TRIALS)]
+                    
+                    successful_runs = [r for r in trial_results if not r.get("error")]
+                    if successful_runs:
+                        avg_result = pd.DataFrame(successful_runs).mean(numeric_only=True).to_dict()
+                        for key, value in successful_runs[0].items():
+                            if key not in avg_result: avg_result[key] = value
+                        avg_result['load_time_s'] = load_time
+                        avg_result['ttft_s'] += load_time
+                        all_results.append(avg_result)
+                    elif trial_results:
+                        all_results.append(trial_results[0])
+                    
+                    pbar.update(1)
+                
+                del llm # Free up memory
+
+    except KeyboardInterrupt:
+        print_message("\nBenchmark interrupted by user. Saving partial results...", bcolors.WARNING)
+    
+    if not all_results:
+        print_message("\nNo benchmarks were successfully completed.", bcolors.FAIL)
+        return
+
+    df = pd.DataFrame(all_results)
+    df['quant'] = df['model_path'].apply(get_quant_from_filename)
+    
+    cols_order = ['model_name', 'quant', 'context_size', 'gen_length', 'ngl', 
+                  'load_time_s', 'ttft_s', 'tps', 'tpm', 'cpu_peak_percent',
+                  'ram_peak_mb', 'vram_peak_mb', 'error']
+    df = df.reindex(columns=[col for col in cols_order if col in df.columns])
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_filename = f"benchmark_results.csv"
+    df.to_csv(output_filename, index=False, float_format='%.2f')
+    print_message(f"\n✅ Benchmarking complete. Results saved to {output_filename}", bcolors.OKGREEN)
+    
+    print_summary(df)
 
 if __name__ == "__main__":
     main()
