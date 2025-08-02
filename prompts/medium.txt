@@ -1,0 +1,1 @@
+Explain how attention mechanisms work in transformer models, especially focusing on how self-attention enables contextual understanding of tokens in a sequence. Also compare the attention head behavior in models like Gemma vs LLaMA.
