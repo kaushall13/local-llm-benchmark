@@ -2,8 +2,6 @@
 
 A comprehensive toolkit to benchmark, monitor, and visualize the performance of local GGUF models. This suite provides the tools necessary to determine the viability and performance characteristics of running open-source language models on your local hardware.
 
-*(Suggestion:* Run the *Streamlit app, take a screenshot, upload it to a service like Imgur, and replace the link above to showcase your work visually.)*
-
 ## **📋 Table of Contents**
 
 * [Features](https://www.google.com/search?q=%23-features)  
