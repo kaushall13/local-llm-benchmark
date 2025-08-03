@@ -35,7 +35,7 @@ A comprehensive toolkit to benchmark, monitor, and visualize the performance of 
 ├── benchmark\_config\_grid.json \# Example configuration file for batch mode  
 └── prompts/  
     └── base\_prompt.txt       \# A sample prompt used for batch benchmarking
-
+Additionally, add a models folder in main directory to store models.
 ## **🛠️ Setup & Installation**
 
 Follow these steps to get the project running on your local machine.
