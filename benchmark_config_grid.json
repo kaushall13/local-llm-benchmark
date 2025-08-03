@@ -1,0 +1,29 @@
+{
+  "models": [
+    {
+      "name": "Meta-Llama-3.1-8B-Instruct",
+      "path": "models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+    },
+    {
+      "name": "Qwen2.5-1.5B-Instruct",
+      "path": "models/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf"
+    },
+    {
+      "name": "vikhr-gemma-2b-instruct",
+      "path": "models/vikhr-gemma-2b-instruct-q4_k_m.gguf"
+    }
+  ],
+  "parameters": {
+    "context_size": [
+      2048
+    ],
+    "gen_length": [
+      128,
+      512
+    ],
+    "ngl": [
+      0,
+      -1
+    ]
+  }
+}
