@@ -26,21 +26,19 @@ class bcolors:
     BOLD = '\033[1m'
 
 # --------------------------- CONFIGURATION ---------------------------- #
-CONFIG_PATH = "benchmark_config_grid.json"
 OUTPUT_CSV_PREFIX = "benchmark_results"
 ENV_SNAPSHOT = "environment_snapshot.json"
 THREADS = psutil.cpu_count(logical=False) or 4 # Default to physical cores
 TRIALS = 2 # Number of times to run each benchmark for averaging
-PROMPT_PATH = "prompts/base_prompt.txt"
 # ---------------------------------------------------------------------- #
 
 def print_message(text, color=bcolors.ENDC):
     """Prints a colored message to the console."""
     print(f"{color}{text}{bcolors.ENDC}")
 
-def read_prompt():
+def read_prompt(prompt_path):
     """Reads the prompt from the specified file."""
-    with open(PROMPT_PATH, 'r', encoding='utf-8') as f:
+    with open(prompt_path, 'r', encoding='utf-8') as f:
         return f.read().strip()
 
 def snapshot_env():
@@ -75,14 +73,14 @@ def monitor_resources(stop_event, result_dict):
     pid = os.getpid()
     process = psutil.Process(pid)
     process.cpu_percent(interval=None) # Prime the pump for cpu_percent
-    
+
     try:
         pynvml.nvmlInit()
         handle = pynvml.nvmlDeviceGetHandleByIndex(0)
         has_gpu = True
     except pynvml.NVMLError:
         has_gpu = False
-    
+
     cpu_usage, ram_usage, vram_usage = [], [], []
 
     while not stop_event.is_set():
@@ -94,7 +92,7 @@ def monitor_resources(stop_event, result_dict):
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             break
         time.sleep(0.2)
-    
+
     result_dict['cpu_peak_percent'] = max(cpu_usage, default=0)
     result_dict['ram_peak_mb'] = max(ram_usage, default=0)
     result_dict['vram_peak_mb'] = max(vram_usage, default=0)
@@ -114,11 +112,11 @@ def run_inference(llm_instance, config, prompt):
     """Runs inference on an already loaded Llama instance."""
     result = {**config, "error": None}
     resource_stats = {}
-    
+
     stop_monitoring = threading.Event()
     monitor_thread = threading.Thread(target=monitor_resources, args=(stop_monitoring, resource_stats))
     monitor_thread.start()
-    
+
     try:
         with open(os.devnull, 'w') as f, contextlib.redirect_stderr(f), contextlib.redirect_stdout(f):
             start_gen_time = time.time()
@@ -128,27 +126,27 @@ def run_inference(llm_instance, config, prompt):
                 temperature=0.7,
             )
             manual_gen_time_s = time.time() - start_gen_time
-        
+
         usage = output['usage']
         prompt_eval_time_s = usage.get('prompt_eval_time', 0) / 1000
         result['ttft_s'] = prompt_eval_time_s # TTFT for a loaded model is just prompt eval time
-        
+
         completion_time_s = usage.get('completion_time', 0) / 1000
         completion_tokens = usage.get('completion_tokens', 0)
-        
+
         tps = 0
         if completion_time_s > 0 and completion_tokens > 0:
             tps = completion_tokens / completion_time_s
         elif manual_gen_time_s > 0 and completion_tokens > 0:
             tps = completion_tokens / manual_gen_time_s
-        
+
         result['tps'] = tps
         result['tpm'] = tps * 60
-        
+
     except Exception as e:
         result['error'] = str(e)
         print_message(f"\n--- INFERENCE FAILED for {config['model_name']}: {e} ---", bcolors.FAIL)
-        
+
     finally:
         stop_monitoring.set()
         monitor_thread.join()
@@ -161,7 +159,7 @@ def generate_test_configs(grid_config):
     test_configs = []
     models = grid_config.get('models', [])
     params = grid_config.get('parameters', {})
-    
+
     param_keys = params.keys()
     param_values = params.values()
     param_combinations = [dict(zip(param_keys, v)) for v in itertools.product(*param_values)]
@@ -174,28 +172,28 @@ def generate_test_configs(grid_config):
                 **param_set
             }
             test_configs.append(config)
-            
+
     return test_configs
 
 def print_summary(df):
     """Prints a formatted summary of the benchmark results to the console."""
     print_message("\n\n--- Benchmark Summary ---", bcolors.HEADER)
-    
+
     # Group by model, then by test parameters
     for model_name, model_group in df.groupby('model_name'):
         print_message(f"\nModel: {bcolors.BOLD}{model_name}{bcolors.ENDC}", bcolors.OKBLUE)
-        
+
         param_groups = model_group.groupby(['context_size', 'gen_length'])
         for params, group in param_groups:
             context_size, gen_length = params
             print(f"  Test Scenario (context: {int(context_size)}, generation: {int(gen_length)}):")
-            
+
             cpu_run = group[group['ngl'] == 0].iloc[0] if not group[group['ngl'] == 0].empty else None
             gpu_run = group[group['ngl'] != 0].iloc[0] if not group[group['ngl'] != 0].empty else None
 
             if cpu_run is not None:
                 print(f"    - CPU: TTFT: {cpu_run['ttft_s']:.2f}s | TPS: {bcolors.OKGREEN}{cpu_run['tps']:.2f}{bcolors.ENDC} | RAM Peak: {cpu_run['ram_peak_mb']:.0f} MB")
-            
+
             if gpu_run is not None:
                 print(f"    - GPU: TTFT: {gpu_run['ttft_s']:.2f}s | TPS: {bcolors.OKGREEN}{gpu_run['tps']:.2f}{bcolors.ENDC} | VRAM Peak: {gpu_run['vram_peak_mb']:.0f} MB")
 
@@ -203,40 +201,38 @@ def print_summary(df):
                 performance_increase = gpu_run['tps'] / cpu_run['tps']
                 print(f"      {bcolors.OKCYAN}Performance Gain: GPU is {performance_increase:.2f}x faster{bcolors.ENDC}")
 
-def main():
+def main(config_path="benchmark_config_grid.json"):
     """Main function to orchestrate the benchmarking suite."""
-    if not os.path.exists(CONFIG_PATH):
-        print_message(f"FATAL: `{CONFIG_PATH}` not found.", bcolors.FAIL)
+    if not os.path.exists(config_path):
+        print_message(f"FATAL: `{config_path}` not found.", bcolors.FAIL)
         return
-        
-    if not os.path.exists(PROMPT_PATH):
-        os.makedirs(os.path.dirname(PROMPT_PATH), exist_ok=True)
-        with open(PROMPT_PATH, "w") as f: f.write("Once upon a time,")
-    
-    with open(CONFIG_PATH, 'r') as f:
+
+    prompt_path = "prompts/base_prompt.txt"
+    if not os.path.exists(prompt_path):
+        os.makedirs(os.path.dirname(prompt_path), exist_ok=True)
+        with open(prompt_path, "w") as f: f.write("Once upon a time,")
+
+    with open(config_path, 'r') as f:
         grid_config = json.load(f)
-    
+
     configs = generate_test_configs(grid_config)
-    
+
     snapshot_env()
-    prompt = read_prompt()
+    prompt = read_prompt(prompt_path)
     all_results = []
-    
-    # Group configs by model, context size, and ngl to minimize model loading
+
     configs.sort(key=itemgetter('model_path', 'context_size', 'ngl'))
     grouped_for_loading = itertools.groupby(configs, key=itemgetter('model_path', 'context_size', 'ngl'))
-    
+
     total_scenarios = len(configs)
-    
+
     try:
         with tqdm(total=total_scenarios, desc="Benchmarking Scenarios", file=sys.stdout) as pbar:
             for (model_path, context_size, ngl), group_iterator in grouped_for_loading:
-                # Convert iterator to list to reuse it
                 group_configs = list(group_iterator)
                 model_name = group_configs[0]['model_name']
                 pbar.set_description(f"Loading {model_name[:20]} (ctx: {context_size}, ngl: {ngl})")
-                
-                # --- Load Model Once Per Group ---
+
                 load_time = 0
                 llm = None
                 try:
@@ -252,12 +248,11 @@ def main():
                         pbar.update(1)
                     continue
 
-                # --- Run Inference for all gen_lengths in this group ---
                 for cfg in group_configs:
                     pbar.set_description(f"Running {cfg['model_name'][:20]} (gen: {cfg['gen_length']})")
-                    
+
                     trial_results = [run_inference(llm, cfg, prompt) for _ in range(TRIALS)]
-                    
+
                     successful_runs = [r for r in trial_results if not r.get("error")]
                     if successful_runs:
                         avg_result = pd.DataFrame(successful_runs).mean(numeric_only=True).to_dict()
@@ -268,31 +263,31 @@ def main():
                         all_results.append(avg_result)
                     elif trial_results:
                         all_results.append(trial_results[0])
-                    
+
                     pbar.update(1)
-                
-                del llm # Free up memory
+
+                del llm
 
     except KeyboardInterrupt:
         print_message("\nBenchmark interrupted by user. Saving partial results...", bcolors.WARNING)
-    
+
     if not all_results:
         print_message("\nNo benchmarks were successfully completed.", bcolors.FAIL)
         return
 
     df = pd.DataFrame(all_results)
     df['quant'] = df['model_path'].apply(get_quant_from_filename)
-    
-    cols_order = ['model_name', 'quant', 'context_size', 'gen_length', 'ngl', 
+
+    cols_order = ['model_name', 'quant', 'context_size', 'gen_length', 'ngl',
                   'load_time_s', 'ttft_s', 'tps', 'tpm', 'cpu_peak_percent',
                   'ram_peak_mb', 'vram_peak_mb', 'error']
     df = df.reindex(columns=[col for col in cols_order if col in df.columns])
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_filename = f"benchmark_results.csv"
+    output_filename = f"{OUTPUT_CSV_PREFIX}.csv"
     df.to_csv(output_filename, index=False, float_format='%.2f')
     print_message(f"\n✅ Benchmarking complete. Results saved to {output_filename}", bcolors.OKGREEN)
-    
+
     print_summary(df)
 
 if __name__ == "__main__":
