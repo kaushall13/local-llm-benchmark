@@ -37,7 +37,7 @@ class ModelMetrics:
     output_tokens: int = 0
     prompt_speed: float = 0.0
     generation_speed: float = 0.0
-    tpm: float = 0.0  # <-- 1. ADDED TPM to dataclass
+    tpm: float = 0.0
     gpu_memory_used: int = 0
     gpu_memory_total: int = 0
     gpu_util: float = 0.0
@@ -78,7 +78,6 @@ class LlamaCppMonitor:
         """Formats and writes the current metrics to the log file."""
         with self._lock:
             m = self.metrics
-            # --- 4. ADDED TPM to log message ---
             log_message = (
                 f"Tokens: {m.output_tokens}, "
                 f"Speed: {m.generation_speed:.1f} t/s ({m.tpm:.0f} TPM), "
@@ -156,7 +155,7 @@ class LlamaCppMonitor:
                 if time_diff > 0:
                     tps = token_diff / time_diff
                     m.generation_speed = tps
-                    m.tpm = tps * 60  # <-- 2. CALCULATED TPM
+                    m.tpm = tps * 60
                 else:
                     m.generation_speed = 0
                     m.tpm = 0
@@ -189,7 +188,6 @@ class LlamaCppMonitor:
         )
         layout["main"].split_row(Layout(name="stats"), Layout(name="resources"))
 
-        # Left Panel: Model Info
         t1 = Table(title="💹 Model Info", title_style="", border_style="dim")
         t1.add_column("Key", style="bold")
         t1.add_column("Value")
@@ -201,7 +199,6 @@ class LlamaCppMonitor:
         t1.add_row("Tokens", str(m.input_tokens + m.output_tokens))
         layout["stats"].update(Panel(t1, style="dim"))
 
-        # Right Panel: System & Cache
         t2 = Table(title="💻 System & Cache", title_style="", border_style="dim")
         t2.add_column("Metric", style="bold")
         t2.add_column("Usage")
@@ -213,7 +210,7 @@ class LlamaCppMonitor:
         t2.add_row("KV Used", f"{self._format_bytes(m.kv_cache_size)}")
         t2.add_row("KV Tokens", str(m.kv_cache_tokens))
         t2.add_row("Gen TPS", f"{m.generation_speed:.1f}")
-        t2.add_row("TPM", f"{m.tpm:.0f}") # <-- 3. ADDED TPM to display
+        t2.add_row("TPM", f"{m.tpm:.0f}")
         layout["resources"].update(Panel(t2, style="dim"))
 
         wrapped_lines = textwrap.wrap(self.raw_generated_text, width=self.output_width)
@@ -298,7 +295,10 @@ class MonitoredLlama(Llama):
         self.monitor.stop_monitoring()
 
 
-if __name__ == "__main__":
+def run_realtime(model_path, prompt, n_gpu_layers=-1, n_ctx=4096):
+    """
+    Sets up and runs the real-time benchmark monitor.
+    """
     MIN_WIDTH = 120
     MIN_HEIGHT = 35
 
@@ -313,19 +313,19 @@ if __name__ == "__main__":
         console.print("Continuing in 2 seconds...")
         time.sleep(2)
 
-    # --- CONFIGURE YOUR MODEL HERE ---
+    # --- Configure and Load the Model ---
     model = MonitoredLlama(
-        model_path="models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
-        n_gpu_layers=-1,
-        n_ctx=4096,
+        model_path=model_path,
+        n_gpu_layers=n_gpu_layers,
+        n_ctx=n_ctx,
         offload_kqv=True,
         verbose=False
     )
 
     try:
         performance_logger.info("--- Starting new generation task ---")
-        prompt = "Explain the theory of general relativity in three concise paragraphs."
-        response = model(prompt, max_tokens=4096, temperature=0.7)
+        # Run the generation
+        response = model(prompt, max_tokens=4000, temperature=0.7)
         performance_logger.info("--- Generation task finished ---")
 
         print("Generation complete. Shutting down in 10 seconds...")
@@ -336,3 +336,17 @@ if __name__ == "__main__":
         print("\n\n[Generation cancelled by user.]")
     finally:
         model.stop_monitoring()
+
+
+if __name__ == "__main__":
+    # This block allows the script to be run standalone for testing/debugging
+    # It will use these default values if not called from the main benchmark.py script
+    default_model = "path/to/your/model.gguf"
+    default_prompt = "Explain the theory of general relativity in full depth."
+
+    if not os.path.exists(default_model):
+        print(f"Error: Default model '{default_model}' not found.")
+        print("Please run this script via the main 'benchmark.py' controller with the --model-path argument,")
+        print("or update the 'default_model' path in this file.")
+    else:
+        run_realtime(model_path=default_model, prompt=default_prompt)
