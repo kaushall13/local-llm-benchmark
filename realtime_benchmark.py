@@ -340,7 +340,7 @@ def run_realtime(model_path, prompt, n_gpu_layers=-1, n_ctx=4096):
 
 if __name__ == "__main__":
     # This block allows the script to be run standalone for testing/debugging
-    # It will use these default values if not called from the main benchmark.py script
+    # It will use these default values if not called from the main.py script
     default_model = "path/to/your/model.gguf"
     default_prompt = "Explain the theory of general relativity in full depth."
 
