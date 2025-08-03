@@ -1,0 +1,8 @@
+pandas
+psutil
+pynvml
+streamlit
+plotly
+tqdm
+rich
+llama-cpp-python
