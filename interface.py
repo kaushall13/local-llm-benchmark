@@ -7,7 +7,7 @@ import os
 # --- Page Configuration ---
 st.set_page_config(
     page_title="LLM Benchmark Dashboard",
-    page_icon="🚀",
+    page_icon="噫",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -28,12 +28,12 @@ def load_data(uploaded_file):
             'vram_peak': 'vram_peak_mb'
         }
         df.rename(columns=lambda c: rename_map.get(c, c), inplace=True)
-        
+
         # Ensure correct data types
         for col in ['tps', 'tpm', 'ttft_s', 'ram_peak_mb', 'vram_peak_mb', 'context_size', 'gen_length']:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
-        
+
         # Drop rows where essential data is missing
         df.dropna(subset=['tps', 'model_name', 'context_size', 'gen_length'], inplace=True)
         return df
@@ -54,11 +54,11 @@ def get_filtered_data(df, models, quants, context_range, gen_range, run_mode):
         filtered_df = filtered_df[filtered_df['ngl'] == 0]
     elif run_mode == "GPU Only":
         filtered_df = filtered_df[filtered_df['ngl'] != 0]
-        
+
     return filtered_df
 
 # --- Main Application ---
-st.title("🚀 LLM Benchmark Visualizer")
+st.title("噫 LLM Benchmark Visualizer")
 st.markdown("Upload your `benchmark_results_*.csv` file to interactively analyze performance.")
 
 # --- File Uploader ---
@@ -72,14 +72,14 @@ else:
     if df is not None and not df.empty:
         # --- Sidebar Filters ---
         with st.sidebar:
-            st.header("🔍 Filters")
-            
+            st.header("剥 Filters")
+
             selected_models = st.multiselect("Model", sorted(df["model_name"].unique()), default=sorted(df["model_name"].unique()))
-            
+
             selected_quants = st.multiselect("Quantization", sorted(df["quant"].unique()), default=sorted(df["quant"].unique()))
-            
+
             run_mode = st.radio("Run Mode", ["All", "CPU Only", "GPU Only"])
-            
+
             # Create sliders only if there is a range of values to select from
             context_min, context_max = int(df["context_size"].min()), int(df["context_size"].max())
             if context_min < context_max:
@@ -103,20 +103,20 @@ else:
             st.warning("No data matches the selected filters. Please adjust your selection.")
         else:
             # --- KPI Summary ---
-            st.subheader("📊 Performance Metrics (Averages for Filtered Data)")
+            st.subheader("投 Performance Metrics (Averages for Filtered Data)")
             kpi_cols = st.columns(5)
             kpi_cols[0].metric("Avg. TPS", f"{filtered_df['tps'].mean():.2f}")
             kpi_cols[1].metric("Avg. TPM", f"{filtered_df['tpm'].mean():.2f}")
             kpi_cols[2].metric("Avg. TTFT (s)", f"{filtered_df['ttft_s'].mean():.2f}")
             kpi_cols[3].metric("Max RAM (MB)", f"{filtered_df['ram_peak_mb'].max():.0f}")
-            
+
             # Handle case where there is no VRAM data
             vram_max = filtered_df['vram_peak_mb'].max()
             kpi_cols[4].metric("Max VRAM (MB)", f"{vram_max:.0f}" if pd.notna(vram_max) and vram_max > 0 else "N/A")
 
 
             # --- Chart Visualizations ---
-            st.subheader("📈 Token Performance Analysis")
+            st.subheader("嶋 Token Performance Analysis")
             c1, c2 = st.columns(2)
 
             with c1:
@@ -135,7 +135,7 @@ else:
                 )
                 st.plotly_chart(fig_ttft, use_container_width=True)
 
-            st.subheader("📉 Resource Usage Analysis")
+            st.subheader("悼 Resource Usage Analysis")
             c3, c4 = st.columns(2)
 
             with c3:
