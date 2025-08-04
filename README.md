@@ -35,6 +35,7 @@ A comprehensive toolkit to benchmark, monitor, and visualize the performance of 
 ├── benchmark\_config\_grid.json \# Example configuration file for batch mode  
 └── prompts/  
     └── base\_prompt.txt       \# A sample prompt used for batch benchmarking
+
 Additionally, add a models folder in main directory to store models.
 ## **🛠️ Setup & Installation**
 
@@ -42,8 +43,8 @@ Follow these steps to get the project running on your local machine.
 
 ### **1\. Clone the Repository**
 
-git clone \[https://github.com/your-username/your-repository-name.git\](https://github.com/your-username/your-repository-name.git)  
-cd your-repository-name
+git clone https://github.com/kaushall13/local-llm-benchmark.git  
+cd local-llm-benchmark
 
 ### **2\. Create a Virtual Environment (Recommended)**
 
