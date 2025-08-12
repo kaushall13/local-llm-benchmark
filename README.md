@@ -196,4 +196,4 @@ This project provides a strong foundation for local LLM evaluation. Future enhan
 
 ## **Development Approach**
 
-For detailed information about the development approach and methodology, see [APPROACH.md](./APPROACH.md).
+For detailed information about the development approach and methodology, see [APPROACH.md](./approach.md).
