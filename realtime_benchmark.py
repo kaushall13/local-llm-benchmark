@@ -30,48 +30,124 @@ performance_logger = logging.getLogger('ollama_performance_logger')
 performance_logger.setLevel(logging.INFO)
 performance_logger.addHandler(log_handler)
 
+console = Console()
+
+
 class TerminalChecker:
-    """Terminal dimension checker and handler"""
-    
-    MIN_WIDTH = 120
+    """Enhanced terminal dimension checker with stability and accuracy improvements"""
+
+    # Reduced default MIN_WIDTH for better compatibility with large fonts
+    MIN_WIDTH = 80
     MIN_HEIGHT = 30
-    
+    SIZE_TOLERANCE = 10  # Increased for more leniency
+    STABILITY_CHECKS = 3  # Require 3 consecutive bad readings before warning
+    CHECK_INTERVAL = 3.0  # Check every 3 seconds instead of 2
+
+    def __init__(self, min_width: Optional[int] = None, min_height: Optional[int] = None):
+        # Allow overriding class defaults with instance-specific values
+        self.MIN_WIDTH = min_width if min_width is not None else self.MIN_WIDTH
+        self.MIN_HEIGHT = min_height if min_height is not None else self.MIN_HEIGHT
+        self._consecutive_bad_readings = 0
+        self._last_known_good_size = None
+        self._size_override = False
+
     @classmethod
     def get_terminal_size(cls) -> Tuple[int, int]:
-        """Get current terminal dimensions"""
+        """Get current terminal dimensions with multiple fallback methods"""
         try:
+            # Method 1: shutil (most common)
             size = shutil.get_terminal_size()
-            return size.columns, size.lines
+            width, height = size.columns, size.lines
+
+            # Sanity check - if dimensions seem too small, try alternatives
+            if width < 40 or height < 10:
+                # Method 2: os.get_terminal_size() if available
+                if hasattr(os, 'get_terminal_size'):
+                    try:
+                        size = os.get_terminal_size()
+                        width, height = size.columns, size.lines
+                    except:
+                        pass
+
+                # Method 3: Environment variables (some CI/automated environments)
+                if width < 40 or height < 10:
+                    try:
+                        width = int(os.environ.get('COLUMNS', width))
+                        height = int(os.environ.get('LINES', height))
+                    except:
+                        pass
+
+            return width, height
+
         except Exception:
-            return 80, 24  # Default fallback
-    
-    @classmethod
-    def check_terminal_size(cls) -> bool:
-        """Check if terminal size is adequate"""
-        width, height = cls.get_terminal_size()
-        return width >= cls.MIN_WIDTH and height >= cls.MIN_HEIGHT
-    
-    @classmethod
-    def wait_for_adequate_size(cls) -> None:
-        """Wait for user to resize terminal to adequate dimensions"""
-        if cls.check_terminal_size():
+            # Final fallback to common default
+            return 80, 24
+
+    def check_terminal_size(self, use_tolerance: bool = True) -> bool:
+        """Check if terminal size is adequate with optional tolerance"""
+        width, height = self.get_terminal_size()
+
+        if use_tolerance:
+            min_width = self.MIN_WIDTH - self.SIZE_TOLERANCE
+            min_height = self.MIN_HEIGHT - self.SIZE_TOLERANCE
+        else:
+            min_width = self.MIN_WIDTH
+            min_height = self.MIN_HEIGHT
+
+        return width >= min_width and height >= min_height
+
+    def check_terminal_size_stable(self) -> bool:
+        """Check terminal size with stability requirements"""
+        if self._size_override:
+            return True
+
+        is_adequate = self.check_terminal_size(use_tolerance=True)
+
+        if is_adequate:
+            self._consecutive_bad_readings = 0
+            width, height = self.get_terminal_size()
+            self._last_known_good_size = (width, height)
+            return True
+        else:
+            self._consecutive_bad_readings += 1
+            # Only consider size inadequate after multiple consecutive bad readings
+            return self._consecutive_bad_readings < self.STABILITY_CHECKS
+
+    def enable_size_override(self):
+        """Allow user to override size checking"""
+        self._size_override = True
+        console.print("[yellow]⚠️  Terminal size checking disabled by user[/yellow]")
+
+    def wait_for_adequate_size(self) -> None:
+        """Wait for user to resize terminal to adequate dimensions with improved UX"""
+        if self.check_terminal_size_stable():
             return
-        
+
         console.print("[yellow]⚠️  Terminal Size Check[/yellow]")
         console.print()
-        
-        while not cls.check_terminal_size():
-            width, height = cls.get_terminal_size()
-            console.clear()
-            
-            # Create a visual warning
-            warning_panel = Panel(
-                f"""[bold red]❌ Terminal Too Small[/bold red]
+
+        warning_shown = False
+        check_count = 0
+
+        while not self.check_terminal_size_stable():
+            width, height = self.get_terminal_size()
+            check_count += 1
+
+            # Only show the warning panel every few checks to reduce flicker
+            if not warning_shown or check_count % 3 == 0:
+                console.clear()
+
+                # Create a visual warning with better formatting
+                tolerance_info = f"(with {self.SIZE_TOLERANCE} char tolerance)" if self.SIZE_TOLERANCE > 0 else ""
+
+                warning_panel = Panel(
+                    f"""[bold red]❌ Terminal Too Small[/bold red]
 
 [yellow]Current size:[/yellow] {width} × {height}
-[yellow]Minimum required:[/yellow] {cls.MIN_WIDTH} × {cls.MIN_HEIGHT}
+[yellow]Minimum required:[/yellow] {self.MIN_WIDTH} × {self.MIN_HEIGHT} {tolerance_info}
 
 [cyan]Please resize your terminal window to be larger.[/cyan]
+[dim](Note: A larger font size reduces character columns/rows)[/dim]
 
 [dim]The monitoring interface requires adequate space to display:
 • Model information and metrics tables
@@ -79,28 +155,40 @@ class TerminalChecker:
 • Generated text output window
 • Performance graphs and statistics[/dim]
 
-[bold green]Resize your terminal and this will automatically continue...[/bold green]""",
-                title="🖥️  Terminal Size Warning",
-                border_style="red",
-                padding=(1, 2)
-            )
-            
-            console.print(Align.center(warning_panel))
-            console.print()
-            console.print(Align.center(f"[dim]Checking every 2 seconds... Current: {width}×{height} | Need: {cls.MIN_WIDTH}×{cls.MIN_HEIGHT}[/dim]"))
-            
-            time.sleep(2)
-        
+[bold green]Resize your terminal and this will automatically continue...[/bold green]
+
+[dim]Or press Ctrl+C then run with --force-size to override this check[/dim]""",
+                    title="🖥️  Terminal Size Warning",
+                    border_style="red",
+                    padding=(1, 2)
+                )
+
+                console.print(Align.center(warning_panel))
+                console.print()
+
+                # Show more detailed status
+                deficit_width = max(0, self.MIN_WIDTH - width)
+                deficit_height = max(0, self.MIN_HEIGHT - height)
+                status_msg = f"[dim]Need {deficit_width} more columns and {deficit_height} more rows | Checking every {self.CHECK_INTERVAL}s...[/dim]"
+                console.print(Align.center(status_msg))
+
+                warning_shown = True
+
+            time.sleep(self.CHECK_INTERVAL)
+
         # Terminal is now adequate size
         console.clear()
+        final_width, final_height = self.get_terminal_size()
         success_panel = Panel(
-            "[bold green]✅ Terminal size is now adequate![/bold green]\n\n[cyan]Starting Ollama monitor...[/cyan]",
+            f"[bold green]✅ Terminal size is now adequate![/bold green]\n\n"
+            f"[cyan]Current size: {final_width} × {final_height}[/cyan]\n"
+            f"[cyan]Starting Ollama monitor...[/cyan]",
             title="🎉 Ready to Start",
             border_style="green"
         )
         console.print(Align.center(success_panel))
         time.sleep(1.5)
-console = Console()
+
 
 @dataclass
 class ModelInfo:
@@ -112,6 +200,7 @@ class ModelInfo:
     context_length: int = 2048
     modified_at: str = ""
     digest: str = ""
+
 
 @dataclass
 class ModelMetrics:
@@ -134,6 +223,7 @@ class ModelMetrics:
     total_duration: float = 0.0
     load_duration: float = 0.0
     generation_status: str = "Idle"
+
 
 @dataclass
 class Config:
@@ -173,15 +263,16 @@ class Config:
             json.dump(config_dict, f, indent=2)
         console.print(f"[green]Configuration saved to {json_path}[/green]")
 
+
 class OllamaModelManager:
     """Enhanced model management with smart model discovery and caching"""
-    
+
     def __init__(self, host: str = "http://localhost:11434"):
         self.host = host
         self._model_cache: Dict[str, ModelInfo] = {}
         self._cache_timestamp: float = 0
         self._cache_ttl: float = 300  # 5 minutes cache
-        
+
     def is_server_running(self) -> bool:
         """Check if Ollama server is running"""
         try:
@@ -197,7 +288,7 @@ class OllamaModelManager:
             if response.status_code == 200:
                 data = response.json()
                 self._model_cache.clear()
-                
+
                 for model_data in data.get('models', []):
                     name = model_data.get('name', '')
                     if name:
@@ -207,7 +298,7 @@ class OllamaModelManager:
                             digest=model_data.get('digest', ''),
                             modified_at=model_data.get('modified_at', '')
                         )
-                
+
                 self._cache_timestamp = time.time()
                 return True
         except Exception as e:
@@ -218,7 +309,7 @@ class OllamaModelManager:
         """Get list of available models with caching"""
         if force_refresh or (time.time() - self._cache_timestamp) > self._cache_ttl:
             self._refresh_model_cache()
-        
+
         return list(self._model_cache.keys())
 
     def find_model(self, model_query: str) -> Optional[str]:
@@ -226,26 +317,26 @@ class OllamaModelManager:
         Smart model finding with fuzzy matching and suggestions
         """
         available_models = self.get_available_models()
-        
+
         # Exact match first
         if model_query in available_models:
             return model_query
-            
+
         # Add :latest if no tag specified
         if ':' not in model_query:
             latest_variant = f"{model_query}:latest"
             if latest_variant in available_models:
                 return latest_variant
-        
+
         # Fuzzy matching - find models containing the query
         matches = []
         query_lower = model_query.lower().replace(':', '').replace('-', '')
-        
+
         for model in available_models:
             model_clean = model.lower().replace(':', '').replace('-', '')
             if query_lower in model_clean or model_clean.startswith(query_lower):
                 matches.append(model)
-        
+
         if matches:
             # Prefer models with :latest or smaller versions first
             matches.sort(key=lambda x: (
@@ -254,71 +345,72 @@ class OllamaModelManager:
                 x  # alphabetical
             ))
             return matches[0]
-        
+
         return None
 
     def get_model_suggestions(self, model_query: str, limit: int = 5) -> List[str]:
         """Get model suggestions based on query"""
         available_models = self.get_available_models()
         query_lower = model_query.lower()
-        
+
         suggestions = []
         for model in available_models:
             if query_lower in model.lower():
                 suggestions.append(model)
-        
+
         return suggestions[:limit]
 
     def pull_model(self, model_name: str, show_progress: bool = True) -> bool:
         """Pull a model with enhanced progress display"""
         if not model_name:
             return False
-            
+
         try:
             console.print(f"[yellow]📥 Pulling model: {model_name}[/yellow]")
-            
+
             response = requests.post(
-                f"{self.host}/api/pull", 
-                json={"name": model_name}, 
-                stream=True, 
+                f"{self.host}/api/pull",
+                json={"name": model_name},
+                stream=True,
                 timeout=600  # 10 minutes timeout for large models
             )
-            
+
             if response.status_code != 200:
                 console.print(f"[red]❌ Failed to initiate pull: {response.status_code}[/red]")
                 return False
-            
+
             last_update = 0
-            
+
             for line in response.iter_lines(decode_unicode=True):
                 if not line:
                     continue
-                    
+
                 try:
                     data = json.loads(line)
                     status = data.get('status', '')
-                    
+
                     if show_progress and time.time() - last_update > 1.0:  # Update every second
                         if 'pulling' in status.lower():
                             total = data.get('total', 0)
                             completed = data.get('completed', 0)
                             if total > 0:
                                 progress = (completed / total) * 100
-                                console.print(f"[dim]Progress: {progress:.1f}% ({self._format_bytes(completed)}/{self._format_bytes(total)})[/dim]")
-                        else:
-                            console.print(f"[dim]{status}[/dim]")
+                                console.print(
+                                    f"[dim]Progress: {progress:.1f}% ({self._format_bytes(completed)}/{self._format_bytes(total)})[/dim]")
+                            else:
+                                console.print(f"[dim]{status}[/dim]")
                         last_update = time.time()
-                    
+
                     if data.get('status') == 'success' or 'successfully' in status.lower():
                         console.print(f"[green]✅ Model {model_name} pulled successfully![/green]")
                         self._refresh_model_cache()  # Refresh cache after successful pull
                         return True
-                        
+
                 except json.JSONDecodeError:
                     continue
-                    
+
             return False
-            
+
         except Exception as e:
             console.print(f"[red]❌ Error pulling model {model_name}: {e}[/red]")
             return False
@@ -329,19 +421,19 @@ class OllamaModelManager:
             cached_info = self._model_cache[model_name]
         else:
             cached_info = ModelInfo(name=model_name)
-        
+
         # Get additional details from show API
         try:
-            response = requests.post(f"{self.host}/api/show", 
-                json={"name": model_name}, timeout=10)
-                
+            response = requests.post(f"{self.host}/api/show",
+                                     json={"name": model_name}, timeout=10)
+
             if response.status_code == 200:
                 data = response.json()
                 details = data.get('details', {})
-                
+
                 cached_info.family = details.get('family', 'Unknown')
                 cached_info.format = details.get('format', 'Unknown')
-                
+
                 # Parse context length from modelfile
                 modelfile = data.get('modelfile', '')
                 if 'num_ctx' in modelfile:
@@ -352,13 +444,13 @@ class OllamaModelManager:
                                 break
                             except (ValueError, IndexError):
                                 pass
-                
+
                 # Update cache
                 self._model_cache[model_name] = cached_info
-                
+
         except Exception:
             pass  # Use cached info if API call fails
-            
+
         return cached_info
 
     def ensure_model_available(self, model_query: str) -> Optional[str]:
@@ -370,19 +462,19 @@ class OllamaModelManager:
             console.print(f"[red]❌ Ollama server is not running at {self.host}[/red]")
             console.print("[yellow]Please start Ollama with: ollama serve[/yellow]")
             return None
-        
+
         # Step 1: Try to find existing model
         found_model = self.find_model(model_query)
         if found_model:
             console.print(f"[green]✅ Model found: {found_model}[/green]")
             return found_model
-        
+
         # Step 2: Try to pull the exact model name
         console.print(f"[yellow]🔍 Model '{model_query}' not found locally. Attempting to pull...[/yellow]")
-        
+
         if self.pull_model(model_query):
             return model_query
-        
+
         # Step 3: Show suggestions
         suggestions = self.get_model_suggestions(model_query)
         if suggestions:
@@ -396,13 +488,13 @@ class OllamaModelManager:
                 console.print("[yellow]Available models:[/yellow]")
                 for model in available_models:
                     console.print(f"  - {model}")
-        
+
         return None
 
     @staticmethod
     def _format_bytes(b):
         """Format bytes into human readable format."""
-        if b is None or b == 0: 
+        if b is None or b == 0:
             return "0 B"
         b = float(b)
         for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
@@ -411,8 +503,11 @@ class OllamaModelManager:
             b /= 1024
         return f"{b:.1f} PB"
 
+
 class OllamaMonitor:
-    def __init__(self, config: Config):
+    """Updated OllamaMonitor class with improved terminal checking"""
+
+    def __init__(self, config: Config, force_size: bool = False, min_width: int = 80, min_height: int = 30):
         self.config = config
         self.metrics = ModelMetrics()
         self.is_monitoring = False
@@ -421,30 +516,34 @@ class OllamaMonitor:
         self.size_monitor_thread = None
         self._lock = threading.RLock()
         self._terminal_size_ok = True
+        self.terminal_checker = TerminalChecker(min_width=min_width, min_height=min_height)
+        if force_size:
+            self.terminal_checker.enable_size_override()
 
         self.raw_generated_text = ""
         self.max_raw_chars = 2000
-        self.output_width = 100
-        self.output_rows = 15
+        # These will be set dynamically based on terminal size in display_metrics_rich
+        self.output_width = None
+        self.output_rows = None
 
         self.generation_start_time = 0
         self.first_token_time = 0
         self.last_update_time = 0
         self.tokens_generated = 0
-        
+
         # Performance optimization: Cache system stats
         self._last_system_update = 0
         self._system_update_interval = 2.0
         self._cached_system_stats = None
 
     def _monitor_terminal_size(self):
-        """Monitor terminal size during execution"""
+        """Monitor terminal size during execution with improved stability"""
         while self.is_monitoring:
-            if not TerminalChecker.check_terminal_size():
+            if not self.terminal_checker.check_terminal_size_stable():
                 self._terminal_size_ok = False
             else:
                 self._terminal_size_ok = True
-            time.sleep(2)  # Check every 2 seconds
+            time.sleep(self.terminal_checker.CHECK_INTERVAL)
 
     def _logging_loop(self):
         """A separate loop that writes logs periodically."""
@@ -474,7 +573,7 @@ class OllamaMonitor:
     def set_model(self, model_name, model_manager: OllamaModelManager):
         """Set model and load its information"""
         self.metrics.model_name = model_name
-        
+
         model_info = model_manager.get_model_info(model_name)
         if model_info:
             self.metrics.model_family = model_info.family
@@ -486,7 +585,7 @@ class OllamaMonitor:
         """Get GPU statistics using nvidia-smi"""
         try:
             result = subprocess.run(
-                ['nvidia-smi', '--query-gpu=memory.used,memory.total,utilization.gpu', 
+                ['nvidia-smi', '--query-gpu=memory.used,memory.total,utilization.gpu',
                  '--format=csv,noheader,nounits'],
                 capture_output=True, text=True, check=True, timeout=1
             )
@@ -498,22 +597,22 @@ class OllamaMonitor:
     def _get_system_stats(self):
         """Get comprehensive system statistics with caching"""
         current_time = time.time()
-        
-        if (self._cached_system_stats and 
-            current_time - self._last_system_update < self._system_update_interval):
+
+        if (self._cached_system_stats and
+                current_time - self._last_system_update < self._system_update_interval):
             return self._cached_system_stats
-        
+
         try:
             cpu_percent = psutil.cpu_percent(interval=None)
             memory = psutil.virtual_memory()
             gpu_used, gpu_total, gpu_util = self._get_gpu_stats()
-            
-            stats = (cpu_percent, memory.percent, memory.used, memory.total, 
-                    gpu_used, gpu_total, gpu_util)
-            
+
+            stats = (cpu_percent, memory.percent, memory.used, memory.total,
+                     gpu_used, gpu_total, gpu_util)
+
             self._cached_system_stats = stats
             self._last_system_update = current_time
-            
+
             return stats
         except:
             return (0.0, 0.0, 0, 0, 0, 0, 0.0)
@@ -522,24 +621,24 @@ class OllamaMonitor:
         """Update metrics with response data from Ollama"""
         if not self.is_monitoring:
             return
-            
+
         try:
             with self._lock:
                 m = self.metrics
-                
+
                 # Update system stats
                 (m.cpu_usage, m.ram_usage, m.ram_used, m.ram_total,
                  m.gpu_memory_used, m.gpu_memory_total, m.gpu_util) = self._get_system_stats()
-                
+
                 # Update from response data if provided
                 if response_data:
                     # Convert nanoseconds to seconds
                     m.total_duration = response_data.get('total_duration', 0) / 1e9
                     m.load_duration = response_data.get('load_duration', 0) / 1e9
-                    
+
                     # Token counts
                     eval_count = response_data.get('eval_count', 0)
-                    
+
                     if eval_count > 0:
                         m.output_tokens = eval_count
         except:
@@ -548,19 +647,19 @@ class OllamaMonitor:
     def update_generated_text(self, text: str, num_tokens: int):
         """Update the generated text display and calculate real-time speed"""
         current_time = time.time()
-        
+
         try:
             self.raw_generated_text += text
             if len(self.raw_generated_text) > self.max_raw_chars:
                 self.raw_generated_text = self.raw_generated_text[-self.max_raw_chars:]
-            
+
             # Update real-time generation speed
             if self.first_token_time == 0:
                 self.first_token_time = current_time
                 self.metrics.generation_status = "Generating"
-            
+
             self.tokens_generated += num_tokens
-            
+
             # Calculate real-time speed
             if (current_time - self.last_update_time) > 1.0:
                 time_elapsed = current_time - self.first_token_time
@@ -574,7 +673,7 @@ class OllamaMonitor:
 
     def _format_bytes(self, b):
         """Format bytes into human readable format."""
-        if b is None or b == 0: 
+        if b is None or b == 0:
             return "0 B"
         b = float(b)
         for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
@@ -584,21 +683,38 @@ class OllamaMonitor:
         return f"{b:.1f} PB"
 
     def display_metrics_rich(self):
-        """Create the Rich layout for displaying metrics"""
+        """Create the Rich layout for displaying metrics with adaptive handling"""
         try:
             with self._lock:
-                # Check if terminal size is adequate
-                if not self._terminal_size_ok:
-                    width, height = TerminalChecker.get_terminal_size()
+                # Check if terminal size is adequate with improved messaging
+                if not self._terminal_size_ok and not self.terminal_checker._size_override:
+                    width, height = self.terminal_checker.get_terminal_size()
+                    deficit_width = max(0, self.terminal_checker.MIN_WIDTH - width)
+                    deficit_height = max(0, self.terminal_checker.MIN_HEIGHT - height)
+
                     return Panel(
                         f"[bold red]❌ Terminal too small![/bold red]\n\n"
                         f"Current: {width}×{height}\n"
-                        f"Required: {TerminalChecker.MIN_WIDTH}×{TerminalChecker.MIN_HEIGHT}\n\n"
-                        f"[yellow]Please resize your terminal window[/yellow]",
+                        f"Required: {self.terminal_checker.MIN_WIDTH}×{self.terminal_checker.MIN_HEIGHT}\n"
+                        f"Need: +{deficit_width} columns, +{deficit_height} rows\n\n"
+                        f"[yellow]Please resize your terminal window or reduce font size.[/yellow]\n"
+                        f"[dim]Or restart with --force-size to override[/dim]",
                         title="⚠️  Resize Terminal",
                         border_style="red"
                     )
-                
+
+                # Get current terminal size for adaptive layout
+                try:
+                    current_width = console.width
+                    current_height = console.height
+                except:
+                    current_width = 80  # Fallback
+                    current_height = 24
+
+                # Dynamically set output dimensions
+                self.output_width = max(60, current_width - 4)  # Margin for borders
+                self.output_rows = max(5, current_height // 4)  # Use ~25% of height for output
+
                 m = self.metrics
                 layout = Layout()
 
@@ -607,7 +723,12 @@ class OllamaMonitor:
                     Layout(size=self.output_rows + 2, name="output"),
                     Layout(size=1, name="footer")
                 )
-                layout["main"].split_row(Layout(name="stats"), Layout(name="resources"))
+
+                # Adaptive split: Horizontal if wide enough, vertical if narrow
+                if current_width >= 100:  # Threshold for side-by-side
+                    layout["main"].split_row(Layout(name="stats"), Layout(name="resources"))
+                else:
+                    layout["main"].split_column(Layout(name="stats"), Layout(name="resources"))
 
                 # Model Info Table
                 t1 = Table(title="🤖 Ollama Model Info", title_style="bold cyan", border_style="dim")
@@ -626,7 +747,8 @@ class OllamaMonitor:
                 t2.add_column("Metric", style="bold")
                 t2.add_column("Value")
                 t2.add_row("CPU Usage", f"{m.cpu_usage:.1f}%")
-                t2.add_row("RAM Usage", f"{m.ram_usage:.1f}% ({self._format_bytes(m.ram_used)}/{self._format_bytes(m.ram_total)})")
+                t2.add_row("RAM Usage",
+                           f"{m.ram_usage:.1f}% ({self._format_bytes(m.ram_used)}/{self._format_bytes(m.ram_total)})")
                 t2.add_row("GPU Memory", f"{m.gpu_memory_used} / {m.gpu_memory_total} MB")
                 t2.add_row("GPU Utilization", f"{m.gpu_util:.1f}%")
                 t2.add_row("Real-time TPS", f"[bold green]{m.tps_realtime:.1f}[/bold green] t/s")
@@ -634,7 +756,7 @@ class OllamaMonitor:
                 t2.add_row("Load Duration", f"{m.load_duration:.2f}s")
                 layout["resources"].update(Panel(t2, style="dim"))
 
-                # Generated Text Output
+                # Generated Text Output with dynamic wrapping
                 wrapped_lines = textwrap.wrap(self.raw_generated_text, width=self.output_width)
                 display_text = "\n".join(wrapped_lines[-self.output_rows:])
 
@@ -646,8 +768,7 @@ class OllamaMonitor:
                 layout["output"].update(output_panel)
 
                 # Footer with terminal size info
-                width, height = TerminalChecker.get_terminal_size()
-                footer_text = f"Press Ctrl+C to stop | Terminal: {width}×{height}"
+                footer_text = f"Press Ctrl+C to stop | Terminal: {current_width}×{current_height}"
                 layout["footer"].update(Align.center(Text(footer_text, style="dim")))
                 return layout
         except:
@@ -656,8 +777,8 @@ class OllamaMonitor:
     def _monitor_loop(self):
         """Main monitoring loop with Rich display"""
         try:
-            refresh_rate = max(1, int(1/self.config.update_interval))
-            with Live(self.display_metrics_rich(), refresh_per_second=refresh_rate, 
+            refresh_rate = max(1, int(1 / self.config.update_interval))
+            with Live(self.display_metrics_rich(), refresh_per_second=refresh_rate,
                       screen=True, transient=True) as live:
                 while self.is_monitoring:
                     try:
@@ -690,19 +811,20 @@ class OllamaMonitor:
             if self.size_monitor_thread:
                 self.size_monitor_thread.join(timeout=1)
 
+
 class MonitoredOllamaAPI:
-    """Enhanced wrapper class with smart model management"""
-    
-    def __init__(self, config: Config):
+    """Enhanced wrapper class with improved terminal handling"""
+
+    def __init__(self, config: Config, force_size: bool = False, min_width: int = 80, min_height: int = 30):
         self.config = config
         self.model_manager = OllamaModelManager(config.host)
-        self.monitor = OllamaMonitor(config)
+        self.monitor = OllamaMonitor(config, force_size=force_size, min_width=min_width, min_height=min_height)
 
     def generate(self, model_name: str):
         """Generate text with real-time monitoring"""
         # Set up model with enhanced info
         self.monitor.set_model(model_name, self.model_manager)
-        
+
         if not self.monitor.is_monitoring:
             self.monitor.start_monitoring()
             time.sleep(0.1)
@@ -724,7 +846,7 @@ class MonitoredOllamaAPI:
                 "top_k": self.config.top_k,
                 "top_p": self.config.top_p,
             }
-            
+
             # Add GPU layers if specified
             if self.config.n_gpu_layers > 0:
                 options["num_gpu"] = self.config.n_gpu_layers
@@ -751,17 +873,17 @@ class MonitoredOllamaAPI:
                     token_count += 1
                     batch_text += token
                     batch_tokens += 1
-                    
+
                     # Batch monitor updates
                     if batch_tokens >= 10 or chunk.get('done', False):
                         self.monitor.update_generated_text(batch_text, batch_tokens)
                         batch_text = ""
                         batch_tokens = 0
-                
+
                 # Update metrics periodically
                 if token_count % 50 == 0 or chunk.get('done', False):
                     self.monitor.update_metrics(chunk)
-                
+
                 if chunk.get('done', False):
                     final_response_data = chunk
                     self.monitor.metrics.generation_status = "Complete"
@@ -785,22 +907,28 @@ class MonitoredOllamaAPI:
         """Stop the monitoring display."""
         self.monitor.stop_monitoring()
 
+
 def create_default_config():
     """Create default configuration file"""
     config = Config()
     config.to_json("config.json")
     console.print("[green]Default configuration file 'config.json' created![/green]")
 
-def run_realtime(config: Config):
+
+def run_realtime(config: Config, force_size: bool = False, min_width: int = 80, min_height: int = 30):
     """
     Enhanced real-time Ollama monitor with smart model management
     """
-    # Check terminal size before starting
-    console.print("[cyan]🔍 Checking terminal dimensions...[/cyan]")
-    TerminalChecker.wait_for_adequate_size()
-    
+    # Create terminal checker instance with potentially custom minimums
+    terminal_checker = TerminalChecker(min_width=min_width, min_height=min_height)
+    if force_size:
+        terminal_checker.enable_size_override()
+    else:
+        console.print("[cyan]🔍 Checking terminal dimensions...[/cyan]")
+        terminal_checker.wait_for_adequate_size()
+
     model_manager = OllamaModelManager(config.host)
-    
+
     # Smart model resolution
     actual_model = model_manager.ensure_model_available(config.model_name)
     if not actual_model:
@@ -809,17 +937,17 @@ def run_realtime(config: Config):
 
     # Create monitored Ollama instance
     console.print(f"[cyan]🚀 Initializing monitored Ollama with model: {actual_model}[/cyan]")
-    
+
     # Update config with actual model name
     config.model_name = actual_model
-    model = MonitoredOllamaAPI(config)
+    model = MonitoredOllamaAPI(config, force_size=force_size, min_width=min_width, min_height=min_height)
 
     try:
         performance_logger.info(f"--- Starting generation with model {actual_model} ---")
-        
+
         # Run the generation
         response = model.generate(actual_model)
-        
+
         if response.get("error"):
             console.print(f"[red]❌ Generation failed: {response['error']}[/red]")
         else:
@@ -827,7 +955,7 @@ def run_realtime(config: Config):
             response_length = len(response.get("response", ""))
             console.print(f"[green]✅ Generation completed successfully![/green]")
             console.print(f"[green]   Generated {token_count} tokens ({response_length} characters)[/green]")
-        
+
         performance_logger.info("--- Generation task finished ---")
         console.print("\n[green]Generation complete. Showing results for 5 seconds...[/green]")
         time.sleep(5)
@@ -841,10 +969,11 @@ def run_realtime(config: Config):
         model.stop_monitoring()
         console.print("[cyan]👋 Monitoring stopped. Goodbye![/cyan]")
 
+
 def main():
     parser = argparse.ArgumentParser(description="Enhanced Ollama Monitor with CLI")
     parser.add_argument("--mode", choices=["realtime", "create-config"], default="realtime",
-                       help="Operation mode")
+                        help="Operation mode")
     parser.add_argument("--model-name", type=str, help="Model name to use")
     parser.add_argument("--prompt", type=str, help="Prompt to generate text from")
     parser.add_argument("--host", type=str, help="Ollama server host")
@@ -857,13 +986,17 @@ def main():
     parser.add_argument("--repeat-penalty", type=float, help="Repeat penalty")
     parser.add_argument("--num-thread", type=int, help="Number of threads")
     parser.add_argument("--config", type=str, help="Path to JSON config file")
-    
+    parser.add_argument("--force-size", action="store_true",
+                        help="Skip terminal size checking (use with caution)")
+    parser.add_argument("--min-width", type=int, help="Override minimum terminal width check")
+    parser.add_argument("--min-height", type=int, help="Override minimum terminal height check")
+
     args = parser.parse_args()
-    
+
     if args.mode == "create-config":
         create_default_config()
         return
-    
+
     # Load configuration
     if args.config:
         config = Config.from_json(args.config)
@@ -871,7 +1004,7 @@ def main():
     else:
         config = Config()
         console.print("[yellow]Using default configuration[/yellow]")
-    
+
     # Override config with command line arguments
     if args.model_name:
         config.model_name = args.model_name
@@ -895,7 +1028,7 @@ def main():
         config.repeat_penalty = args.repeat_penalty
     if args.num_thread is not None:
         config.num_thread = args.num_thread
-    
+
     # Display current configuration
     console.print("[cyan]🔧 Current Configuration:[/cyan]")
     console.print(f"  Model: {config.model_name}")
@@ -906,9 +1039,10 @@ def main():
     console.print(f"  GPU Layers: {config.n_gpu_layers}")
     console.print(f"  Prompt: {config.prompt[:50]}{'...' if len(config.prompt) > 50 else ''}")
     console.print()
-    
+
     if args.mode == "realtime":
-        run_realtime(config)
+        run_realtime(config, force_size=args.force_size, min_width=args.min_width, min_height=args.min_height)
+
 
 if __name__ == "__main__":
     main()
