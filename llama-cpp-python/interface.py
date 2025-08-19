@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.express as px
 import os
 
-# --- Page Configuration ---
+# ---- Page Configuration ----
 st.set_page_config(
     page_title="LLM Benchmark Dashboard",
     page_icon="噫",
