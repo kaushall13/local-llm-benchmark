@@ -18,7 +18,7 @@ import logging
 from typing import *
 from dataclasses import dataclass
 
-# --- LOGGER SETUP ---
+# ---- LOGGER SETUP ----
 log_formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 log_handler = logging.FileHandler('ollama_benchmark_log.txt')
 log_handler.setFormatter(log_formatter)
