@@ -1,3 +1,4 @@
+#imports
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -6,7 +7,7 @@ import os
 # --- Page Configuration ---
 st.set_page_config(
     page_title="LLM Benchmark Dashboard",
-    page_icon="📊",
+    page_icon="噫",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -17,21 +18,16 @@ def load_data(uploaded_file):
     """Load data from the uploaded CSV file and prepare it for analysis."""
     try:
         df = pd.read_csv(uploaded_file)
-        # Map benchmark script column names to dashboard expected names
+        # Standardize column names that might vary
         rename_map = {
-            'model_name': 'model_name',
-            'num_ctx': 'context_size',
-            'completion_tokens': 'gen_length',  # Use completion_tokens as gen_length
-            'ttft_s': 'ttft_s',
-            'ram_peak_mb': 'ram_peak_mb',
-            'vram_peak_mb': 'vram_peak_mb',
-            'num_gpu': 'ngl'  # Map num_gpu to ngl for GPU layer filtering
+            'model': 'model_name',
+            'context': 'context_size',
+            'gen_len': 'gen_length',
+            'ttft': 'ttft_s',
+            'ram_peak': 'ram_peak_mb',
+            'vram_peak': 'vram_peak_mb'
         }
-        df.rename(columns=rename_map, inplace=True)
-
-        # Add a placeholder 'quant' column if not present, as it's not provided by the benchmark script
-        if 'quant' not in df.columns:
-            df['quant'] = 'Unknown'  # Default value since quantization isn't specified
+        df.rename(columns=lambda c: rename_map.get(c, c), inplace=True)
 
         # Ensure correct data types
         for col in ['tps', 'tpm', 'ttft_s', 'ram_peak_mb', 'vram_peak_mb', 'context_size', 'gen_length']:
@@ -48,10 +44,10 @@ def load_data(uploaded_file):
 def get_filtered_data(df, models, quants, context_range, gen_range, run_mode):
     """Apply all user-defined filters to the DataFrame."""
     filtered_df = df[
-        (df['model_name'].isin(models)) &
-        (df['quant'].isin(quants)) &
-        (df['context_size'].between(context_range[0], context_range[1])) &
-        (df['gen_length'].between(gen_range[0], gen_range[1]))
+        df['model_name'].isin(models) &
+        df['quant'].isin(quants) &
+        df['context_size'].between(context_range[0], context_range[1]) &
+        df['gen_length'].between(gen_range[0], gen_range[1])
     ].copy()
 
     if run_mode == "CPU Only":
@@ -62,8 +58,8 @@ def get_filtered_data(df, models, quants, context_range, gen_range, run_mode):
     return filtered_df
 
 # --- Main Application ---
-st.title("📊 LLM Benchmark Visualizer")
-st.markdown("Upload your `ollama_benchmark_results_*.csv` file to interactively analyze performance.")
+st.title("噫 LLM Benchmark Visualizer")
+st.markdown("Upload your `benchmark_results_*.csv` file to interactively analyze performance.")
 
 # --- File Uploader ---
 uploaded_file = st.file_uploader("Choose a benchmark CSV file", type="csv")
@@ -76,18 +72,15 @@ else:
     if df is not None and not df.empty:
         # --- Sidebar Filters ---
         with st.sidebar:
-            st.header("🔍 Filters")
+            st.header("剥 Filters")
 
-            # Model selection
             selected_models = st.multiselect("Model", sorted(df["model_name"].unique()), default=sorted(df["model_name"].unique()))
 
-            # Quantization selection (will likely be 'Unknown' unless added to benchmark script)
             selected_quants = st.multiselect("Quantization", sorted(df["quant"].unique()), default=sorted(df["quant"].unique()))
 
-            # Run mode selection
             run_mode = st.radio("Run Mode", ["All", "CPU Only", "GPU Only"])
 
-            # Context size slider
+            # Create sliders only if there is a range of values to select from
             context_min, context_max = int(df["context_size"].min()), int(df["context_size"].max())
             if context_min < context_max:
                 context_range = st.slider("Context Size", context_min, context_max, (context_min, context_max))
@@ -95,13 +88,13 @@ else:
                 st.markdown(f"**Context Size:** `{context_min}` (only one value in data)")
                 context_range = (context_min, context_max)
 
-            # Generation length slider
             gen_len_min, gen_len_max = int(df["gen_length"].min()), int(df["gen_length"].max())
             if gen_len_min < gen_len_max:
                 gen_range = st.slider("Generation Length", gen_len_min, gen_len_max, (gen_len_min, gen_len_max))
             else:
                 st.markdown(f"**Generation Length:** `{gen_len_min}` (only one value in data)")
                 gen_range = (gen_len_min, gen_len_max)
+
 
         # Apply filters
         filtered_df = get_filtered_data(df, selected_models, selected_quants, context_range, gen_range, run_mode)
@@ -110,7 +103,7 @@ else:
             st.warning("No data matches the selected filters. Please adjust your selection.")
         else:
             # --- KPI Summary ---
-            st.subheader("📈 Performance Metrics (Averages for Filtered Data)")
+            st.subheader("投 Performance Metrics (Averages for Filtered Data)")
             kpi_cols = st.columns(5)
             kpi_cols[0].metric("Avg. TPS", f"{filtered_df['tps'].mean():.2f}")
             kpi_cols[1].metric("Avg. TPM", f"{filtered_df['tpm'].mean():.2f}")
@@ -121,8 +114,9 @@ else:
             vram_max = filtered_df['vram_peak_mb'].max()
             kpi_cols[4].metric("Max VRAM (MB)", f"{vram_max:.0f}" if pd.notna(vram_max) and vram_max > 0 else "N/A")
 
+
             # --- Chart Visualizations ---
-            st.subheader("📊 Token Performance Analysis")
+            st.subheader("嶋 Token Performance Analysis")
             c1, c2 = st.columns(2)
 
             with c1:
@@ -141,7 +135,7 @@ else:
                 )
                 st.plotly_chart(fig_ttft, use_container_width=True)
 
-            st.subheader("📊 Resource Usage Analysis")
+            st.subheader("悼 Resource Usage Analysis")
             c3, c4 = st.columns(2)
 
             with c3:
