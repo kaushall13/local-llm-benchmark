@@ -1,10 +1,15 @@
 # Local LLM Benchmark  
 
 **A modular benchmarking toolkit to evaluate local LLMs with Ollama.**  
-Measure throughput, latency, and system-level metrics across models, quantizations, and prompt lengths—helping you determine deployment viability for your hardware.  
-<img width="1820" height="794" alt="file_2025-08-19_16 36 48" src="https://github.com/user-attachments/assets/96370c1e-a1f7-4ce6-8766-03c9bd35de8c" />
-<img width="1861" height="915" alt="example_image1" src="https://github.com/user-attachments/assets/9d4c4105-b239-448f-b525-73b9cf5503c8" />
+Measure throughput, latency, and system-level metrics across models, quantizations, and prompt lengths—helping you determine deployment viability for your hardware.
 
+
+## 📊 Example Output Screenshots  
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/96370c1e-a1f7-4ce6-8766-03c9bd35de8c" alt="Benchmark Table" width="48%"/>
+  <img src="https://github.com/user-attachments/assets/9d4c4105-b239-448f-b525-73b9cf5503c8" alt="Live Monitoring Example" width="48%"/>
+</p>
 
 ---
 
