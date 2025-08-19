@@ -1,7 +1,8 @@
-# local-llm-benchmark  
+# Local LLM Benchmark  
 
 **A modular benchmarking toolkit to evaluate local LLMs with Ollama.**  
 Measure throughput, latency, and system-level metrics across models, quantizations, and prompt lengths—helping you determine deployment viability for your hardware.  
+<img width="1820" height="794" alt="file_2025-08-19_16 36 48" src="https://github.com/user-attachments/assets/96370c1e-a1f7-4ce6-8766-03c9bd35de8c" />
 
 ---
 
