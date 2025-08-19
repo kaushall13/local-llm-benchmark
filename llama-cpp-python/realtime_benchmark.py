@@ -16,7 +16,7 @@ from rich.text import Text
 from rich.console import Console
 from rich.align import Align
 
-# --- SETUP THE LOGGER ---
+# --- SETTING UP THE LOGGER ---
 log_formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 log_handler = logging.FileHandler('log.txt')
 log_handler.setFormatter(log_formatter)
