@@ -2,7 +2,7 @@ import argparse
 import sys
 import os
 
-# Import the refactored functions from your other scripts
+# Import the refactored functions from the other scripts
 import batch_benchmark
 import realtime_benchmark
 
