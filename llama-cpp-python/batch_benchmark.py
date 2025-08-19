@@ -14,7 +14,7 @@ import contextlib
 import itertools
 from operator import itemgetter
 
-# ----------------- ANSI Color Codes for Terminal Output ----------------- #
+# ---------------- ANSI Color Codes for Terminal Output ---------------- #
 class bcolors:
     HEADER = '\033[95m'
     OKBLUE = '\033[94m'
