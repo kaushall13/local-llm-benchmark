@@ -1,199 +1,112 @@
-# **Local LLM Performance & Benchmarking Suite**
+# local-llm-benchmark  
 
-A comprehensive toolkit to benchmark, monitor, and visualize the performance of local GGUF models. This suite provides the tools necessary to determine the viability and performance characteristics of running open-source language models on your local hardware.
+**A modular benchmarking toolkit to evaluate local LLMs with Ollama.**  
+Measure throughput, latency, and system-level metrics across models, quantizations, and prompt lengths—helping you determine deployment viability for your hardware.  
 
-## **📋 Table of Contents**
+---
 
-* [Features](#features)  
-* [Project Structure](#project-structure)  
-* [Setup & Installation](#setup--installation)  
-* [Usage](#usage)  
-  * [1. Batch Benchmarking](#1-batch-benchmarking)  
-  * [2. Real-time Monitoring](#2-real-time-monitoring)  
-  * [3. Visualizing Results](#3-visualizing-results)  
-* [Configuration](#configuration)  
-* [Output](#output)  
-* [Future Scope](#future-scope)  
-* [Development Approach](#development-approach)
+## 🚀 Introduction  
 
-## **Features**
+Running large language models locally can be fast, private, and cost-effective—but performance varies dramatically depending on the **model**, **quantization**, and **hardware setup**.  
 
-* **📊 Comprehensive Batch Benchmarking**: Systematically run tests on multiple models with varying parameters (context size, generation length, GPU layers) from a single configuration file.  
-* **🚀 Real-time Performance Monitoring**: Launch a live dashboard in your terminal to monitor a model's performance metrics (TPS, TPM, resource usage) as it generates text.  
-* **📈 Interactive Visualization Dashboard**: A user-friendly Streamlit web interface to upload and analyze your benchmark results, featuring interactive charts and filters.  
-* **💻 Hardware Resource Tracking**: Monitors and records peak CPU, RAM, and VRAM usage for each benchmark run to understand hardware limitations.  
-* **⚙️ Unified & Modular Design**: A single, clean command-line interface (main.py) controls the different modes, with logic cleanly separated into distinct modules.
+**local-llm-benchmark** provides:  
+- A **simple Ollama-based benchmarking flow** for quick evaluations.  
+- Detailed metrics on **throughput, latency, and resource usage**.  
+- Flexible configuration so you can tailor benchmarks to your environment.  
 
-## **Project Structure**
+> ✅ By default, this project uses **Ollama** for a frictionless setup.  
+> ⚙️ Advanced users can optionally use the **llama.cpp backend** (see [`setup.md`](setup.md) for detailed installation).  
 
-```
-.  
-├── main.py                   # Main entry point to run the benchmark suite  
-├── batch_benchmark.py        # Core logic for running batch tests from a config file  
-├── realtime_benchmark.py     # Core logic for the live terminal monitoring dashboard  
-├── interface.py              # Streamlit web application for visualizing results  
-├── requirements.txt          # Python dependencies for the project  
-├── benchmark_config_grid.json # Example configuration file for batch mode  
-└── prompts/  
-    └── base_prompt.txt       # A sample prompt used for batch benchmarking
-```
+---
 
-Additionally, add a models folder in main directory to store models.
+## ✨ Key Features  
 
-## **Setup & Installation**
+- 🔹 **Ollama-first design** – start benchmarking in minutes.  
+- 🔹 **Latency & throughput metrics** – tokens/sec, tokens/min, time to first token.  
+- 🔹 **Resource monitoring** – track CPU, RAM, and GPU usage.  
+- 🔹 **Config-driven** – define models, quantizations, prompt sizes in JSON/YAML.  
+- 🔹 **Extensible** – add new models, backends, or metrics with minimal changes.  
 
-Follow these steps to get the project running on your local machine.
+---
 
-### **1. Clone the Repository**
+## 📦 Getting Started  
+
+### 1. Install Dependencies  
+Make sure [Ollama](https://ollama.ai/) is installed and running on your system. Then clone and install requirements:  
 
 ```bash
-git clone https://github.com/kaushall13/local-llm-benchmark.git  
+git clone https://github.com/kaushall13/local-llm-benchmark
 cd local-llm-benchmark
-```
-
-### **2. Create a Virtual Environment (Recommended)**
-
-```bash
-python -m venv venv  
-source venv/bin/activate
-# On Windows, use venv\Scripts\activate
-```
-
-### **3. Install Dependencies**
-
-Install all the necessary Python packages from the requirements.txt file.
-
-```bash
 pip install -r requirements.txt
 ```
 
-### **4. Download GGUF Models**
+### 2. Configure Your Benchmark  
+Edit `config.json` (or your own config file) to specify models, quantizations, and prompt lengths.  
 
-This tool requires GGUF-formatted models to run. Download the models you wish to test (e.g., from Hugging Face) and place them in a known directory (e.g., a models/ folder).
-
-## **Usage**
-
-The benchmarking suite is controlled via main.py and offers two primary modes.
-
-### **1. Batch Benchmarking**
-
-This mode is ideal for running a comprehensive set of tests overnight or for a long period. It reads its configuration from benchmark_config_grid.json.
-
-**To run the batch benchmark:**
-
-```bash
-python main.py --mode batch
-```
-
-* The script will automatically find benchmark_config_grid.json.  
-* It will run through all model and parameter combinations defined in the file.  
-* A benchmark_results.csv file will be created or overwritten with the new results.
-
-To use a different configuration file:
-
-```bash
-python main.py --mode batch --config my_custom_config.json
-```
-
-### **2. Real-time Monitoring**
-
-This mode is perfect for quick, interactive tests of a single model. It launches a live dashboard directly in your terminal.
-
-> To run the real-time monitor:  
-> You must provide the path to a model. 
-
-```bash
-python main.py --mode realtime --model-path "path/to/your/model.gguf"
-```
-
-> Customizing the real-time session:  
-> You can specify the prompt, context size, and number of GPU layers. 
-
-```bash
-python main.py --mode realtime \
-  --model-path "path/to/your/model.gguf" \
-  --prompt "Write a long, detailed story about a robot who discovers music." \
-  --n-gpu-layers 35 \
-  --n-ctx 4096
-```
-
-### **3. Visualizing Results**
-
-After running a batch benchmark, you can analyze the generated benchmark_results.csv using the interactive Streamlit dashboard.
-
-**To launch the dashboard:**
-
-```bash
-streamlit run interface.py
-```
-
-* This will open a new tab in your web browser.  
-* Click the "Browse files" button to upload your benchmark_results.csv file.  
-* The dashboard will update instantly, allowing you to filter and explore your results.
-
-## **Configuration**
-
-The batch benchmark mode is controlled by benchmark_config_grid.json. This file defines the models to test and the parameters to test them with.
-
-**Example benchmark_config_grid.json:**
-
+Example:  
 ```json
-{  
-  "models": [  
-    {  
-      "name": "Llama-3.1-8B-Instruct-Q4_K_M",  
-      "path": "models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"  
-    },  
-    {  
-      "name": "Qwen-2.5-7B-Instruct-Q4_K_M",  
-      "path": "models/Qwen-2.5-7B-Instruct-Q4_K_M.gguf"  
-    }  
-  ],  
-  "parameters": {  
-    "context_size": [2048, 4096],  
-    "gen_length": [256, 512, 1024],  
-    "ngl": [0, 99]  
-  }  
+{
+  "models": [
+    { "name": "llama3.1:8b", "quant": "Q4_K_M", "prompt_length": 512, "gen_length": 512 }
+  ],
+  "runs": 3
 }
 ```
 
-* **models**: A list of model objects, each with a display name and the path to the GGUF file.  
-* **parameters**: A dictionary where each key is a parameter (context_size, gen_length, ngl) and the value is a list of settings to test. The script will generate a test for every possible combination.  
-  * ngl: 0 will test CPU-only inference.  
-  * ngl: 99 will offload all possible layers to the GPU.
+### 3. Run the Benchmark  
+```bash
+python benchmark.py --config config.json
+```
 
-## **Output**
+Results will include:  
+- Average **tokens per minute (TPM)**  
+- **Latency breakdown** (time-to-first-token, tokens/sec)  
+- Peak **CPU/RAM/GPU usage**  
 
-The primary output of the batch benchmark is the benchmark_results.csv file, which contains the following columns:
+---
 
-| Column | Description |
-| :---- | :---- |
-| model_name | The display name of the model. |
-| quant | The quantization type (e.g., Q4_K_M), extracted from the filename. |
-| context_size | The context size (n_ctx) used for the run. |
-| gen_length | The number of tokens generated (max_tokens). |
-| ngl | The number of GPU layers offloaded. |
-| load_time_s | Time taken to load the model into memory (in seconds). |
-| ttft_s | Time to First Token (in seconds). |
-| tps | Tokens per Second during generation. |
-| tpm | Tokens per Minute (tps * 60). |
-| cpu_peak_percent | Peak CPU utilization during inference. |
-| ram_peak_mb | Peak RAM usage (in Megabytes). |
-| vram_peak_mb | Peak VRAM usage (in Megabytes). |
-| error | Any error message, if the run failed. |
+## 📊 Example Output  
 
-The tool also generates a log.txt for the real-time monitor and an environment_snapshot.json to record the hardware used for the tests.
+```
+--------------------------------------------------------------------------------
+Model                     | Quant    | Avg TPM    | Load (ms)  | Peak VRAM (MB)  | Peak RAM (MB)
+--------------------------------------------------------------------------------
+llama3.1:8b               | Q4_K_M   | 15,930     | 78         | 4560            | 8221
+qwen2.5:1.5b              | Q4_K_M   | 8,450      | 65         | 2100            | 4120
+gemma:2b                  | Q4_K_M   | 10,120     | 72         | 2350            | 4300
+```
 
-## **Future Scope**
+---
 
-This project provides a strong foundation for local LLM evaluation. Future enhancements could include:
+## ⚙️ Advanced Mode: llama.cpp  
 
-* **Quality Benchmarking**: Integrate metrics like perplexity or run standardized evaluations (e.g., MMLU, HellaSwag) to measure model output quality in addition to performance.  
-* **Historical Comparison**: Enhance the Streamlit dashboard to compare two different benchmark_results.csv files, allowing for easy A/B testing of hardware or model changes.  
-* **Expanded Model Support**: Add support for other model libraries beyond llama-cpp-python, such as Ollama or vLLM, to broaden the scope of testing.  
-* **Automated Reporting**: Add a feature to automatically generate a PDF or HTML summary report from the benchmark results, including key charts and system information.  
-* **Power Usage Monitoring**: Integrate power consumption tracking (e.g., via pyJoules) to analyze the energy efficiency (performance-per-watt) of different models and hardware setups.
+For users who want more control (e.g., CUDA layers, context sizes, fine-grained performance tuning), we also provide a **llama.cpp backend**.  
 
-## **Development Approach**
+- Requires additional setup (CUDA toolkit, VS Build Tools on Windows, etc.).  
+- See [`setup.md`](setup.md) for detailed installation and build instructions.  
+- Once installed, you can benchmark llama.cpp models using the same config format.  
 
-For detailed information about the development approach and methodology, see [APPROACH.md](./approach.md).
+---
+
+## 📌 Use Cases  
+
+- **Model selection** – compare LLaMA, Qwen, Gemma, and more.  
+- **Quantization trade-offs** – balance memory savings vs. speed.  
+- **Hardware profiling** – see how different CPUs/GPUs perform.  
+- **Deployment readiness** – identify configs that meet latency & throughput goals.  
+
+---
+
+## 🤝 Contributing  
+
+We welcome contributions!  
+- Add new models or quantization formats.  
+- Improve monitoring & visualization.  
+- Share benchmarking results across devices.  
+
+Fork, branch, and open a PR 🚀  
+
+---
+
+## 📄 License  
+This project is licensed under the **MIT License**.  
